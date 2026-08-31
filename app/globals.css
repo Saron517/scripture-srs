@@ -133,6 +133,17 @@ button:disabled {
   cursor: default;
 }
 
+button.reset {
+  font-size: 12px;
+  padding: 6px 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+button.reset:hover:not(:disabled) {
+  color: var(--fg);
+}
+
 .rating {
   display: flex;
   flex-direction: column;

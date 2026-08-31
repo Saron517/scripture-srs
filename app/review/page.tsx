@@ -97,6 +97,8 @@ export default function ReviewPage() {
   const [revealed, setRevealed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -126,6 +128,43 @@ export default function ReviewPage() {
   useEffect(() => {
     void loadQueue();
   }, [loadQueue]);
+
+  /**
+   * Demo mode: reset the whole shared deck to brand-new and due now, straight
+   * from the app — no SQL editor needed. Runs the same UPDATE as the reset
+   * snippet in supabase/migrations/0002_demo_mode.sql, allowed by the
+   * demo_cards_update RLS policy. First click arms; second click within a few
+   * seconds executes.
+   */
+  const resetDemo = useCallback(async () => {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      window.setTimeout(() => setConfirmReset(false), 3000);
+      return;
+    }
+    setConfirmReset(false);
+    setResetting(true);
+    setError(null);
+    const { error: rErr } = await supabase
+      .from('cards')
+      .update({
+        state: 'new',
+        due_at: new Date().toISOString(),
+        interval_days: 0,
+        ease_factor: 2.5,
+        reps: 0,
+        lapses: 0,
+        learning_step_index: 0,
+        last_reviewed_at: null,
+      })
+      .eq('user_id', DEMO_USER_ID);
+    setResetting(false);
+    if (rErr) {
+      setError(rErr.message);
+      return;
+    }
+    await loadQueue();
+  }, [confirmReset, supabase, loadQueue]);
 
   const current = queue[index];
 
@@ -198,11 +237,25 @@ export default function ReviewPage() {
             Demo mode — shared data, no sign-in
           </span>
         </div>
-        {queue.length > 0 && index < queue.length && (
-          <span className="muted">
-            {index + 1} / {queue.length}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {queue.length > 0 && index < queue.length && (
+            <span className="muted">
+              {index + 1} / {queue.length}
+            </span>
+          )}
+          <button
+            className="reset"
+            onClick={() => void resetDemo()}
+            disabled={resetting || loading}
+            title="Set every demo card back to new and due now"
+          >
+            {resetting
+              ? 'Resetting…'
+              : confirmReset
+                ? 'Confirm reset?'
+                : 'Reset demo deck'}
+          </button>
+        </div>
       </div>
 
       {error && <div className="err">{error}</div>}
