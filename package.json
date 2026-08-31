@@ -1,0 +1,29 @@
+{
+  "name": "scripture-srs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Spaced-repetition core + Supabase schema + review UI for a multilingual scripture memorization tool",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.47.10",
+    "next": "^15.1.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

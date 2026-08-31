@@ -1,0 +1,164 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fafafa;
+  --card: #ffffff;
+  --fg: #191919;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --accent: #2563eb;
+  --err-bg: #fef2f2;
+  --err-fg: #b91c1c;
+  --err-border: #fecaca;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f0f10;
+    --card: #161617;
+    --fg: #ededed;
+    --muted: #9ca3af;
+    --border: #27272a;
+    --accent: #60a5fa;
+    --err-bg: #2a0e0e;
+    --err-fg: #fca5a5;
+    --err-border: #7f1d1d;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.6 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 20px;
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px;
+  background: var(--card);
+}
+
+.ref {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
+.passage {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 24px;
+  line-height: 1.7;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 46vh;
+  overflow: auto;
+  margin: 0 0 24px;
+}
+
+.passage[dir='rtl'] {
+  font-size: 26px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.err {
+  color: var(--err-fg);
+  background: var(--err-bg);
+  border: 1px solid var(--err-border);
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 14px;
+  background: transparent;
+  color: var(--fg);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rating {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 84px;
+}
+
+.rating small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+form.auth {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+input[type='email'] {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg);
+  flex: 1;
+  min-width: 200px;
+}
