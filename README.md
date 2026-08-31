@@ -5,7 +5,7 @@ Supabase and an SM‑2 spaced‑repetition scheduler. Pick up the next verse tha
 due, recite it, reveal, and grade yourself; the schedule updates and the verse
 comes back later.
 
-- **Live:** https://scripture-srs-saron517.vercel.app
+- **Live:** https://scripture-srs.vercel.app
 - **Repo:** https://github.com/Saron517/scripture-srs
 
 ---
