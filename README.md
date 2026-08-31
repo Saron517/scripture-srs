@@ -14,29 +14,25 @@ comes back later.
 
 ### 1. Hours spent
 
-About 2 hours and half.
+About 3 hours, most of it spent debugging deployment and auth issues rather than the core scheduling logic itself.
 
-### 2. The hardest decision, and why
+### 2. Hardest decision: requiring sign‑in on the review screen, then removing it
 
-What was hard: deciding whether the /review screen should require signing in at all.
+Every table has a security rule that only lets you see rows tied to your own account (auth.uid()). That's the right way to build something multiple people will use, but it created a real problem. If someone visits /review without signing in, they don't get an error, they just see an empty screen with no verses to review. It looks broken even though nothing is technically wrong.
 
-Why: every table has a security rule that only lets you see rows tied to your own account (auth.uid()). That's the right way to build something multiple people will use, but it created a problem. If someone visits /review without signing in, they don't get an error, they just see an empty screen with no verses to review. It looks broken even though nothing is actually wrong.
+At first I added a simple magic link sign in (an email with a link you click to log in, no password needed) to solve this. But once I actually tested it with an outside reviewer, it broke in three different ways in a row: the login email pointed to my local computer instead of the live site, a new user account failed to create in the database, and then Supabase's email system hit a rate limit from too many attempts. Each of those was a real, separate bug, not the same one repeating.
 
-That left me with two options. I could leave the screen open to anyone, but it wouldn't actually work until I built a real login system later. Or I could add sign in right now, even though this was supposed to be a small, single screen task.
+After the third failure, I made the call to remove sign in from the review screen entirely and replace it with a shared "demo mode" that anyone can use immediately, no login at all. This meant writing new database policies that let anyone read and update one fixed demo account's data, instead of requiring their own account. It felt like a step backward from proper multi user design, but it was the right call given that the whole point was for someone else to actually be able to test it without me standing over their shoulder.
 
-I chose to add a simple sign in using magic links (an email with a link you click to log in, no password needed), and wrote down what still needs to be set up in Supabase for it to fully work. Making the task bigger than planned felt like the wrong move at first, but shipping a screen that couldn't actually show anything felt worse
 ### 3. One thing I know is hacky
 
+next.config.mjs has a setting called extensionAlias that tells the bundler to treat .js file imports as if they were .ts files. My scheduler code imports its own files using .js at the end, which is normal in plain JavaScript projects, but Next.js's default bundler doesn't automatically know those .js imports actually point to .ts files, so I forced it to understand that with this setting. The catch is this only works with one specific bundler. If someone runs the newer, faster dev server instead, it breaks with no warning at all, and nothing in the scheduler code explains why this setting exists. The clean fix would be to remove the .js extensions from the imports or turn the scheduler into its own separate package. I didn't have time to do either.
 
-next.config.mjs has a setting called extensionAlias that tells the bundler to treat .js file imports as if they were .ts files. Here's why I needed it: the scheduler code in src/ imports its own files using .js at the end (a normal thing to do in plain JavaScript projects), but Next.js's default bundler doesn't automatically know those .js imports actually point to .ts files. So I forced it to understand that with this setting.
-
-The catch: this only works with one specific bundler (webpack). If someone runs the newer, faster dev server (Turbopack) instead, it breaks with no warning at all, and nothing in the scheduler code itself explains why this setting exists. The real fix would be to either remove the .js extensions from the imports, or turn src/ into its own separate package. I didn't have time to do either.
-
-A smaller thing: there's one spot in the review page where I forced TypeScript to accept a type using as unknown as CardRow[]. I did that because I wrote the data types by hand instead of generating them automatically from the database, so I had to manually convince the type checker.
+A second thing, smaller but still worth naming: because reviewing a card pushes it to a future due date, once someone finishes reviewing everything, the app just says nothing is due, with no way to try it again without resetting the data. I ended up adding a "Reset demo deck" button directly in the app so anyone can reset it themselves without needing database access, but this only exists because the natural behavior of a spaced repetition app makes repeat demoing awkward.
 
 ### 4. How I used AI
 
-I used Claude Code to actually build the app, and reviewed each piece as it came back to me. I handed it the Supabase schema, the SM2 scheduler, the tests, and the /review screen in Next.js. I pushed back on scope twice: I told it to skip building a passage picker and any translation licensing logic, since verses just get imported from a JSON file, and I insisted the scheduler stay a pure function that never reads the system clock, so it could actually be tested properly. I also overrode its suggestion during a Git problem: when my first push got rejected, it suggested rebasing, but I chose to force push instead, since the only thing on the remote was GitHub's automatically generated placeholder README.
+I used Claude Code to build the app and reviewed each piece as it came back to me. I handed it the database schema, the scheduling logic, the tests, and the actual screen. I pushed back on scope more than once: I told it to skip building a verse picker or handling translation licensing, since verses just get imported from a file, and I insisted the scheduler stay a pure function that never reads the system clock so it could actually be tested. I also overrode its suggestion during a git conflict, choosing to force push over its suggested rebase since the remote only held an empty placeholder file. The most valuable part of working with it happened during deployment, when a reviewer hit a real bug I couldn't reproduce myself. I had Claude Code check the actual database directly rather than guessing, which is how we found the real problem: a stale link pointing to an old, frozen version of the site.
 
 ---
 
