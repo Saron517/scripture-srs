@@ -1,11 +1,44 @@
 # scripture-srs
 
-A multilingual scripture‑memorization tool: a Supabase schema, a pure
-spaced‑repetition scheduler, a 30‑day review simulation test suite, and a
-Next.js review screen.
+A multilingual scripture‑memorization tool — one screen at `/review`, backed by
+Supabase and an SM‑2 spaced‑repetition scheduler. Pick up the next verse that's
+due, recite it, reveal, and grade yourself; the schedule updates and the verse
+comes back later.
 
-Verse text is **not** fetched or licensed here — you supply it as a JSON file and
-import it (`verses.example.json` shows the shape). There is no passage picker.
+- **Live:** https://scripture-mfj58sj11-saron517.vercel.app
+- **Repo:** https://github.com/Saron517/scripture-srs
+
+---
+
+## Submission
+
+### 1. Hours spent
+
+About 2 hours and half.
+
+### 2. The hardest decision, and why
+
+What was hard: deciding whether the /review screen should require signing in at all.
+
+Why: every table has a security rule that only lets you see rows tied to your own account (auth.uid()). That's the right way to build something multiple people will use, but it created a problem. If someone visits /review without signing in, they don't get an error, they just see an empty screen with no verses to review. It looks broken even though nothing is actually wrong.
+
+That left me with two options. I could leave the screen open to anyone, but it wouldn't actually work until I built a real login system later. Or I could add sign in right now, even though this was supposed to be a small, single screen task.
+
+I chose to add a simple sign in using magic links (an email with a link you click to log in, no password needed), and wrote down what still needs to be set up in Supabase for it to fully work. Making the task bigger than planned felt like the wrong move at first, but shipping a screen that couldn't actually show anything felt worse
+### 3. One thing I know is hacky
+
+
+next.config.mjs has a setting called extensionAlias that tells the bundler to treat .js file imports as if they were .ts files. Here's why I needed it: the scheduler code in src/ imports its own files using .js at the end (a normal thing to do in plain JavaScript projects), but Next.js's default bundler doesn't automatically know those .js imports actually point to .ts files. So I forced it to understand that with this setting.
+
+The catch: this only works with one specific bundler (webpack). If someone runs the newer, faster dev server (Turbopack) instead, it breaks with no warning at all, and nothing in the scheduler code itself explains why this setting exists. The real fix would be to either remove the .js extensions from the imports, or turn src/ into its own separate package. I didn't have time to do either.
+
+A smaller thing: there's one spot in the review page where I forced TypeScript to accept a type using as unknown as CardRow[]. I did that because I wrote the data types by hand instead of generating them automatically from the database, so I had to manually convince the type checker.
+
+### 4. How I used AI
+
+I used Claude Code to actually build the app, and reviewed each piece as it came back to me. I handed it the Supabase schema, the SM2 scheduler, the tests, and the /review screen in Next.js. I pushed back on scope twice: I told it to skip building a passage picker and any translation licensing logic, since verses just get imported from a JSON file, and I insisted the scheduler stay a pure function that never reads the system clock, so it could actually be tested properly. I also overrode its suggestion during a Git problem: when my first push got rejected, it suggested rebasing, but I chose to force push instead, since the only thing on the remote was GitHub's automatically generated placeholder README.
+
+---
 
 ## Layout
 
@@ -16,7 +49,7 @@ import it (`verses.example.json` shows the shape). There is no passage picker.
 | `src/i18n/direction.ts` | `directionForLanguage` / `passageTextAttrs` for RTL rendering |
 | `app/`, `lib/supabase/` | Next.js (App Router) app — the `/review` screen |
 | `test/` | Unit tests + deterministic 30‑day simulation |
-| `scripts/import-passages.ts` | Optional: load a verses JSON file into `passages` |
+| `scripts/import-passages.ts` | Load a verses JSON file into `passages` |
 | `scripts/sim-report.ts` | Print the 30‑day simulation as tables: `npx tsx scripts/sim-report.ts [seed] [days]` |
 
 ## Commands
