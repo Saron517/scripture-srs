@@ -1,10 +1,30 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+/**
+ * /review — DEMO MODE (not multi-user).
+ *
+ * Sign-in is disabled so a reviewer can test the live deployment with zero
+ * friction. Every visitor reads and writes the SAME fixed demo account's cards:
+ *
+ *     DEMO_USER_ID = 5f3fc43e-cdaa-4bf5-849e-b79834150da0
+ *
+ * This only works because supabase/migrations/0002_demo_mode.sql adds RLS
+ * policies that expose exactly that user's rows to the anonymous role. All other
+ * users' rows stay private. There is no isolation between demo visitors — they
+ * share one deck.
+ *
+ * To restore real auth: bring back the magic-link flow from git history
+ * (commit before this change) and drop the demo_* policies.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { createClient } from '@/lib/supabase/client';
 import { passageTextAttrs } from '@/src/i18n/direction';
 import { review, type Card as SchedulerCard, type Rating } from '@/src/scheduler';
+
+/** The single account whose data the public demo shares. Demo mode only. */
+const DEMO_USER_ID = '5f3fc43e-cdaa-4bf5-849e-b79834150da0';
 
 // ── row shapes (snake_case, straight from Postgres) ─────────────────────────
 
@@ -70,46 +90,29 @@ function formatNext(card: SchedulerCard, now: number): string {
 export default function ReviewPage() {
   const supabase = useMemo(() => createClient(), []);
 
-  const [ready, setReady] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [queue, setQueue] = useState<CardRow[]>([]);
   const [index, setIndex] = useState(0);
   const [reviewed, setReviewed] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [email, setEmail] = useState('');
-  const [magicSent, setMagicSent] = useState(false);
-
-  // Auth bootstrap + keep in sync with magic-link return.
-  useEffect(() => {
-    let active = true;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setUserId(data.session?.user.id ?? null);
-      setReady(true);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserId(session?.user.id ?? null);
-    });
-    return () => {
-      active = false;
-      sub.subscription.unsubscribe();
-    };
-  }, [supabase]);
 
   const loadQueue = useCallback(async () => {
+    setLoading(true);
     setError(null);
     // The scheduler never reads a clock — the UI decides what "now" is.
     const nowIso = new Date().toISOString();
     const { data, error: qErr } = await supabase
       .from('cards')
       .select(CARD_COLUMNS)
+      .eq('user_id', DEMO_USER_ID) // demo mode: one fixed account, no auth
       .eq('is_suspended', false)
       .lte('due_at', nowIso)
       .order('due_at', { ascending: true })
       .limit(50);
 
+    setLoading(false);
     if (qErr) {
       setError(qErr.message);
       return;
@@ -121,8 +124,8 @@ export default function ReviewPage() {
   }, [supabase]);
 
   useEffect(() => {
-    if (ready && userId) void loadQueue();
-  }, [ready, userId, loadQueue]);
+    void loadQueue();
+  }, [loadQueue]);
 
   const current = queue[index];
 
@@ -139,7 +142,7 @@ export default function ReviewPage() {
   }, [current]);
 
   async function grade(rating: Rating) {
-    if (!current || !userId || !current.passages) return;
+    if (!current || !current.passages) return;
     setSaving(true);
     setError(null);
 
@@ -161,7 +164,7 @@ export default function ReviewPage() {
       .eq('id', current.id);
 
     const { error: reviewErr } = await supabase.from('reviews').insert({
-      user_id: userId,
+      user_id: DEMO_USER_ID, // demo mode: fixed account
       card_id: current.id,
       reviewed_at: new Date(log.reviewedAt).toISOString(),
       rating: log.rating,
@@ -184,24 +187,18 @@ export default function ReviewPage() {
     setIndex((i) => i + 1);
   }
 
-  async function sendMagicLink(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    const { error: authErr } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.href },
-    });
-    if (authErr) setError(authErr.message);
-    else setMagicSent(true);
-  }
-
   // ── render ───────────────────────────────────────────────────────────────
 
   return (
     <main className="wrap">
       <div className="top">
-        <h1>Scripture Review</h1>
-        {userId && queue.length > 0 && index < queue.length && (
+        <div>
+          <h1>Scripture Review</h1>
+          <span className="muted" style={{ display: 'block', marginTop: 2 }}>
+            Demo mode — shared data, no sign-in
+          </span>
+        </div>
+        {queue.length > 0 && index < queue.length && (
           <span className="muted">
             {index + 1} / {queue.length}
           </span>
@@ -210,38 +207,16 @@ export default function ReviewPage() {
 
       {error && <div className="err">{error}</div>}
 
-      {!ready && <p className="muted">Loading…</p>}
+      {loading && <p className="muted">Loading…</p>}
 
-      {ready && !userId && (
-        <div className="card">
-          <p style={{ marginTop: 0 }}>Sign in to start a review session.</p>
-          {magicSent ? (
-            <p className="muted">Check your email for a sign-in link.</p>
-          ) : (
-            <form className="auth" onSubmit={sendMagicLink}>
-              <input
-                type="email"
-                required
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <button type="submit" className="primary">
-                Send magic link
-              </button>
-            </form>
-          )}
-        </div>
-      )}
-
-      {ready && userId && queue.length === 0 && (
+      {!loading && queue.length === 0 && (
         <div className="card">
           <p style={{ marginTop: 0 }}>Nothing due right now.</p>
           <button onClick={() => void loadQueue()}>Refresh</button>
         </div>
       )}
 
-      {ready && userId && queue.length > 0 && index >= queue.length && (
+      {!loading && queue.length > 0 && index >= queue.length && (
         <div className="card">
           <p style={{ marginTop: 0 }}>Session complete — {reviewed} reviewed.</p>
           <button className="primary" onClick={() => void loadQueue()}>
@@ -250,7 +225,7 @@ export default function ReviewPage() {
         </div>
       )}
 
-      {ready && userId && current && (
+      {!loading && current && (
         <div className="card">
           <div className="ref">{current.passages?.reference ?? '—'}</div>
 
