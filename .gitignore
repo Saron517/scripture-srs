@@ -10,3 +10,8 @@ dist/
 /out/
 next-env.d.ts
 *.tsbuildinfo
+
+# Submission drafts (kept local, not part of the repo)
+SUBMISSION.md
+SUBMISSION.docx
+~$*
