@@ -40,12 +40,14 @@ I used Claude Code to build the app and reviewed each piece as it came back to m
 
 | Path | What it is |
 | --- | --- |
-| `supabase/migrations/` | `0001` schema/RLS · `0002` demo mode · `0003` Leitner box columns |
+| `supabase/migrations/` | `0001` schema/RLS · `0002` demo mode · `0003` Leitner box columns · `0004` seed the B_Cards deck for the demo user |
 | `src/scheduler/leitner.ts` | Pure Leitner box scheduler (Build Lane Challenge `B_Rules`) — `createCard`, `review`, `isDue`, `selectDueQueue` |
 | `src/scheduler/sm2.ts` | Earlier SM‑2 scheduler — kept for reference, no longer wired to the app |
+| `src/checker/` | Pure answer checker (`B_Rules` "Answer checking" / "Partial credit") — `normalizeForCheck`, `checkAnswer` |
 | `src/i18n/direction.ts` | `directionForLanguage` / `passageTextAttrs` for RTL rendering |
 | `app/`, `lib/supabase/` | Next.js (App Router) app — the `/review` screen |
 | `test/` | Unit tests + deterministic 30‑day simulation |
+| `scripts/b-cards.json` | The Build Lane Challenge B_Cards deck (16 passages, en/zh/ar/hi) |
 | `scripts/import-passages.ts` | Load a verses JSON file into `passages` |
 | `scripts/sim-report.ts` | Print the 30‑day simulation as tables: `npx tsx scripts/sim-report.ts [seed] [days]` |
 
@@ -55,7 +57,7 @@ I used Claude Code to build the app and reviewed each piece as it came back to m
 npm install
 npm run dev       # Next.js dev server → http://localhost:3000 (redirects to /review)
 npm run build     # production build
-npm test          # vitest run — 48 tests (incl. B_Check_Schedule conformance)
+npm test          # vitest run — 81 tests (B_Check_Schedule + B_Check_Answers conformance)
 npm run typecheck # tsc --noEmit
 ```
 
@@ -73,11 +75,20 @@ npm run typecheck # tsc --noEmit
    `is_suspended = false` and `due_at <= now`, then ordered client-side by
    `selectDueQueue()` — most overdue → lowest box → reference A-Z, capped at 20
    (`B_Rules` daily cap).
-4. Per card: shows the reference → **Reveal** → passage text rendered with its own
-   `dir`/`lang` (`passageTextAttrs`) → four grade buttons with next-interval
-   previews.
-5. On a grade, runs the pure `review()` (the **UI** supplies `now = Date.now()`),
-   then `UPDATE cards` (box, due date) + `INSERT reviews` (box transition).
+4. Per card: shows the reference. For a language the checker knows
+   (`en`/`ar`/`hi`/`zh`) you can type the passage and **Check** it — that runs
+   the pure `checkAnswer()` and reveals the verse with a
+   `correct`/`partial`/`incorrect` verdict; **Reveal without checking** skips
+   straight to the text. Either way the passage renders with its own `dir`/`lang`
+   (`passageTextAttrs`), then four grade buttons with next-interval previews.
+5. On a grade, runs the pure `review()` (the **UI** supplies `now`), then
+   `UPDATE cards` (box, due date) + `INSERT reviews` (box transition).
+
+**Simulated clock.** Every clock read on the page — queue load, previews, the
+grade write, the demo reset — goes through one `now = Date.now() + offset`. The
+**+1 day / +7 days / Today** control moves `offset` in whole days (persisted to
+`localStorage`), so the shared demo deck can be pushed past its due dates
+without waiting real time. The scheduler itself still never reads a clock.
 
 `.env.local` is git-ignored (`.env.*`). The anon key is meant to ship to the
 browser; RLS is what protects data.
@@ -118,6 +129,42 @@ if (isDue(card, now)) {
 step-for-step. `test/leitner.test.ts` covers each grade, the `hard` floor at every
 box, purity, and `selectDueQueue` ordering.
 
+## Answer checking
+
+`src/checker/` grades a typed recitation against the card, following the
+`B_Rules` "Answer checking" and "Partial credit" sections. Like the scheduler
+it is pure — no I/O, no clock.
+
+- `normalize.ts` applies the **same** normalisation to the card and the input
+  before comparing: NFC, curly quotes → straight, full-width punctuation →
+  ASCII, Arabic harakat / alef-wasla / alef-maqsura, the Devanagari nukta —
+  then strips all punctuation, folds case, collapses whitespace.
+- `check.ts` compares word-by-word for `en` / `ar` / `hi` (the count and
+  1-based position of every mismatch, plus missing / extra runs) and
+  character-by-character for `zh`. The verdict is `correct`, `partial`, or
+  `incorrect` — `incorrect` once the substitution rate over the compared region
+  reaches `INCORRECT_RATIO` (0.2), or nothing matched at all.
+
+`test/checker.test.ts` replays all 21 `B_Check_Answers` rows and asserts the
+exact numeric prose the sheet spells out.
+
+### Two deviations from `B_Check_Answers`
+
+Both are on the English **Matthew 28:19** card, and in both the verdict
+*category* still matches the sheet — only a number differs.
+
+1. **Word count — we report 24, the sheet says 22.** The "Empty string" row's
+   expected prose is "0 of 22 words matched". The B_Cards text for that verse
+   ("Go ye therefore, and teach all nations, baptizing them in the name of the
+   Father, and of the Son, and of the Holy Ghost:") is 24 whitespace-separated
+   tokens, and the checker tokenises on whitespace, so it reports 24.
+2. **Mismatch position — we report 15, the sheet says 16.** In the "Curly
+   apostrophe and quotes" row the input reads "Father’s" where the card has
+   "Father". Normalisation straightens the curly apostrophe and then strips it,
+   so "Father’s" collapses to the single token "fathers"; position-by-position
+   comparison puts the wrong word at 15. Position 16 would be correct only if
+   the apostrophe had split it into two tokens.
+
 ## Languages & RTL
 
 Each passage stores its own `text` and `language` (BCP‑47, e.g. `en`, `zh-Hans`,
@@ -152,6 +199,13 @@ SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... IMPORT_USER_ID=<uuid> \
 
 Inserting a `passages` row auto‑creates its `cards` row (trigger), so the import
 only touches `passages`. `direction` is computed by the DB.
+
+The Build Lane Challenge deck is committed as `scripts/b-cards.json` (16
+passages, `en`/`zh-Hans`/`ar`/`hi`; the text is byte-identical to the checker's
+`B_Check_Answers` fixtures). Migration `0004_seed_b_cards.sql` loads it into the
+shared demo account, so the live `/review` deck comes up populated —
+`npx tsx scripts/import-passages.ts scripts/b-cards.json` does the same against
+any user.
 
 ## Tests
 
