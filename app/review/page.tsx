@@ -24,8 +24,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { createClient } from '@/lib/supabase/client';
+import { checkAnswer, type CheckLang, type CheckResult } from '@/src/checker/index';
 import { passageTextAttrs } from '@/src/i18n/direction';
 import {
+  DAY_MS,
   review,
   selectDueQueue,
   type Card as SchedulerCard,
@@ -34,6 +36,22 @@ import {
 
 /** The single account whose data the public demo shares. Demo mode only. */
 const DEMO_USER_ID = '5f3fc43e-cdaa-4bf5-849e-b79834150da0';
+
+/** localStorage key for the simulated-clock offset (whole days, may be 0). */
+const CLOCK_KEY = 'review:nowOffsetDays';
+
+/**
+ * Map a passage's BCP-47 language to a checker language, or null when the
+ * checker has no rules for it (the answer box is then hidden and the card is
+ * revealed without a check).
+ */
+function toCheckLang(language: string): CheckLang | null {
+  const primary = language.toLowerCase().split('-', 1)[0];
+  if (primary === 'en' || primary === 'ar' || primary === 'hi' || primary === 'zh') {
+    return primary as CheckLang;
+  }
+  return null;
+}
 
 // ── row shapes (snake_case, straight from Postgres) ─────────────────────────
 
@@ -98,11 +116,34 @@ export default function ReviewPage() {
   const [resetting, setResetting] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
 
+  // Simulated clock: whole-day offset added to the real clock so the demo deck
+  // can be pushed into the future without waiting real days. The scheduler is
+  // still pure — this only changes the `now` the UI feeds it. Persisted so a
+  // reload keeps the shifted date.
+  const [nowOffsetDays, setNowOffsetDays] = useState(0);
+
+  // Type-to-check recall: the reviewer's typed answer and the last check result.
+  const [answer, setAnswer] = useState('');
+  const [check, setCheck] = useState<CheckResult | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(CLOCK_KEY);
+      const n = raw == null ? 0 : Number.parseInt(raw, 10);
+      if (Number.isFinite(n) && n !== 0) setNowOffsetDays(n);
+    } catch {
+      /* localStorage unavailable — stay on the real clock */
+    }
+  }, []);
+
+  /** The instant the UI treats as "now": real clock plus the demo offset. */
+  const nowMs = useCallback(() => Date.now() + nowOffsetDays * DAY_MS, [nowOffsetDays]);
+
   const loadQueue = useCallback(async () => {
     setLoading(true);
     setError(null);
     // The scheduler never reads a clock — the UI decides what "now" is.
-    const now = Date.now();
+    const now = nowMs();
     const { data, error: qErr } = await supabase
       .from('cards')
       .select(CARD_COLUMNS)
@@ -128,7 +169,9 @@ export default function ReviewPage() {
     setIndex(0);
     setReviewed(0);
     setRevealed(false);
-  }, [supabase]);
+    setAnswer('');
+    setCheck(null);
+  }, [supabase, nowMs]);
 
   useEffect(() => {
     void loadQueue();
@@ -153,7 +196,7 @@ export default function ReviewPage() {
       .update({
         box: 0,
         review_count: 0,
-        due_at: new Date().toISOString(),
+        due_at: new Date(nowMs()).toISOString(),
         last_reviewed_at: null,
       })
       .eq('user_id', DEMO_USER_ID);
@@ -163,28 +206,42 @@ export default function ReviewPage() {
       return;
     }
     await loadQueue();
-  }, [confirmReset, supabase, loadQueue]);
+  }, [confirmReset, supabase, loadQueue, nowMs]);
+
+  /** Move the simulated clock by `deltaDays`, or back to today when it is 0. */
+  const shiftClock = useCallback((deltaDays: number) => {
+    setNowOffsetDays((prev) => {
+      const next = deltaDays === 0 ? 0 : prev + deltaDays;
+      try {
+        window.localStorage.setItem(CLOCK_KEY, String(next));
+      } catch {
+        /* localStorage unavailable — offset is session-only */
+      }
+      return next;
+    });
+  }, []);
 
   const current = queue[index];
+  const checkLang = current?.passages ? toCheckLang(current.passages.language) : null;
 
   // Next-interval preview for each rating button.
   const previews = useMemo(() => {
     if (!current) return null;
     const card = rowToCard(current);
-    const now = Date.now();
+    const now = Date.now() + nowOffsetDays * DAY_MS;
     const byRating = {} as Record<Rating, string>;
     for (const { key } of RATINGS) {
       byRating[key] = formatInterval(review(card, key, now).log.intervalDays);
     }
     return byRating;
-  }, [current]);
+  }, [current, nowOffsetDays]);
 
   async function grade(rating: Rating) {
     if (!current || !current.passages) return;
     setSaving(true);
     setError(null);
 
-    const now = Date.now(); // clock lives here, in the UI, then is passed in
+    const now = nowMs(); // clock lives here, in the UI, then is passed in
     const { card: next, log } = review(rowToCard(current), rating, now);
 
     const { error: cardErr } = await supabase
@@ -216,6 +273,8 @@ export default function ReviewPage() {
     }
     setReviewed((n) => n + 1);
     setRevealed(false);
+    setAnswer('');
+    setCheck(null);
     setIndex((i) => i + 1);
   }
 
@@ -251,6 +310,28 @@ export default function ReviewPage() {
         </div>
       </div>
 
+      <div className="clock">
+        <span className="muted">
+          {nowOffsetDays === 0
+            ? 'Clock: today (real time)'
+            : `Clock: ${new Date(Date.now() + nowOffsetDays * DAY_MS).toLocaleDateString()} · +${nowOffsetDays}d`}
+        </span>
+        <span className="clock-btns">
+          <button onClick={() => shiftClock(1)} disabled={loading || saving || resetting}>
+            +1 day
+          </button>
+          <button onClick={() => shiftClock(7)} disabled={loading || saving || resetting}>
+            +7 days
+          </button>
+          <button
+            onClick={() => shiftClock(0)}
+            disabled={loading || saving || resetting || nowOffsetDays === 0}
+          >
+            Today
+          </button>
+        </span>
+      </div>
+
       {error && <div className="err">{error}</div>}
 
       {loading && <p className="muted">Loading…</p>}
@@ -281,6 +362,12 @@ export default function ReviewPage() {
             </p>
           ) : revealed ? (
             <>
+              {check && (
+                <div className={`verdict verdict-${check.verdict}`}>
+                  <strong>{check.verdict}</strong>
+                  <span>{check.summary}</span>
+                </div>
+              )}
               <p className="passage" {...passageTextAttrs(current.passages.language)}>
                 {current.passages.text}
               </p>
@@ -303,12 +390,45 @@ export default function ReviewPage() {
             </>
           ) : (
             <>
-              <p className="muted" style={{ marginBottom: 24 }}>
-                Recite it from memory, then reveal.
+              <p className="muted" style={{ marginBottom: 12 }}>
+                {checkLang
+                  ? 'Recite it from memory — type it below and check, or just reveal.'
+                  : 'Recite it from memory, then reveal.'}
               </p>
-              <button className="primary" onClick={() => setRevealed(true)}>
-                Reveal
-              </button>
+              {checkLang && (
+                <textarea
+                  className="answer"
+                  rows={4}
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  placeholder="Type the passage from memory…"
+                  {...passageTextAttrs(current.passages.language)}
+                />
+              )}
+              <div className="controls" style={{ marginTop: 12 }}>
+                {checkLang && (
+                  <button
+                    className="primary"
+                    disabled={answer.trim().length === 0}
+                    onClick={() => {
+                      if (!current.passages || !checkLang) return;
+                      setCheck(checkAnswer(answer, current.passages.text, checkLang));
+                      setRevealed(true);
+                    }}
+                  >
+                    Check
+                  </button>
+                )}
+                <button
+                  className={checkLang ? '' : 'primary'}
+                  onClick={() => {
+                    setCheck(null);
+                    setRevealed(true);
+                  }}
+                >
+                  {checkLang ? 'Reveal without checking' : 'Reveal'}
+                </button>
+              </div>
             </>
           )}
         </div>
