@@ -40,8 +40,9 @@ I used Claude Code to build the app and reviewed each piece as it came back to m
 
 | Path | What it is |
 | --- | --- |
-| `supabase/migrations/0001_init.sql` | `passages`, `cards`, `reviews` tables + RLS, triggers, `due_cards(now, limit)` |
-| `src/scheduler/` | Pure SM‑2 scheduler — `createCard`, `review`, `isDue` |
+| `supabase/migrations/` | `0001` schema/RLS · `0002` demo mode · `0003` Leitner box columns |
+| `src/scheduler/leitner.ts` | Pure Leitner box scheduler (Build Lane Challenge `B_Rules`) — `createCard`, `review`, `isDue`, `selectDueQueue` |
+| `src/scheduler/sm2.ts` | Earlier SM‑2 scheduler — kept for reference, no longer wired to the app |
 | `src/i18n/direction.ts` | `directionForLanguage` / `passageTextAttrs` for RTL rendering |
 | `app/`, `lib/supabase/` | Next.js (App Router) app — the `/review` screen |
 | `test/` | Unit tests + deterministic 30‑day simulation |
@@ -54,7 +55,7 @@ I used Claude Code to build the app and reviewed each piece as it came back to m
 npm install
 npm run dev       # Next.js dev server → http://localhost:3000 (redirects to /review)
 npm run build     # production build
-npm test          # vitest run — 25 tests
+npm test          # vitest run — 48 tests (incl. B_Check_Schedule conformance)
 npm run typecheck # tsc --noEmit
 ```
 
@@ -65,58 +66,57 @@ npm run typecheck # tsc --noEmit
 1. Reads `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from
    `.env.local` (`lib/supabase/client.ts`, via `@supabase/ssr`
    `createBrowserClient`).
-2. Signs the user in with a magic link (`signInWithOtp`) — required because every
-   table's RLS policy is scoped to `auth.uid()`, so an anonymous client sees no
-   rows.
+2. **Demo mode, no sign-in.** `0002_demo_mode.sql` opens one fixed demo user's
+   rows to the anon role, so `/review` reads and writes that shared deck with no
+   auth. A "Reset demo deck" button re-arms it.
 3. Loads the due queue: `cards` embedded with `passages`, filtered
-   `is_suspended = false` and `due_at <= now`, ordered by `due_at`.
+   `is_suspended = false` and `due_at <= now`, then ordered client-side by
+   `selectDueQueue()` — most overdue → lowest box → reference A-Z, capped at 20
+   (`B_Rules` daily cap).
 4. Per card: shows the reference → **Reveal** → passage text rendered with its own
-   `dir`/`lang` (`passageTextAttrs`) → four rating buttons with next‑interval
+   `dir`/`lang` (`passageTextAttrs`) → four grade buttons with next-interval
    previews.
-5. On a rating, runs the pure `review()` (the **UI** supplies `now = Date.now()`),
-   then `UPDATE cards` + `INSERT reviews`.
+5. On a grade, runs the pure `review()` (the **UI** supplies `now = Date.now()`),
+   then `UPDATE cards` (box, due date) + `INSERT reviews` (box transition).
 
-Only a browser client is wired up. For server components / SSR auth, add the
-`@supabase/ssr` server client and a session‑refresh middleware.
-
-`.env.local` is git‑ignored (`.env.*`). The anon key is meant to ship to the
+`.env.local` is git-ignored (`.env.*`). The anon key is meant to ship to the
 browser; RLS is what protects data.
 
 ## The scheduler
 
-`src/scheduler/sm2.ts` is an SM‑2 (Anki‑style) variant with explicit learning and
-relearning steps. Two hard rules:
+`src/scheduler/leitner.ts` implements the Leitner box system from the Build Lane
+Challenge Option B `B_Rules` tab. Two hard rules:
 
 1. **Pure.** The input `Card` is never mutated; `review()` returns a new card plus
    a log row.
 2. **No ambient clock.** Time enters only through the `now` argument (epoch ms).
    Nothing calls `Date.now()`, `new Date()`, or `performance.now()`. Same
-   arguments → same result, whenever it runs. A non‑finite `now` throws.
+   arguments → same result, whenever it runs. A non-finite `now` throws.
 
 ```ts
-import { createCard, review, isDue } from './src/scheduler';
+import { createCard, review, isDue } from './src/scheduler/leitner';
 
-let card = createCard(now);                 // `now`: epoch ms, from the caller
+let card = createCard(now);                 // box 0, due now — `now` is epoch ms
 if (isDue(card, now)) {
   const { card: next, log } = review(card, 'good', now); // 'again'|'hard'|'good'|'easy'
   // persist `next` to cards, insert `log` into reviews
 }
 ```
 
-`Card` fields map 1:1 to columns on `cards`; `ReviewLog` fields map to `reviews`.
-Tune behaviour by passing a `Partial<SchedulerConfig>` as the 4th argument
-(`DEFAULT_CONFIG` in `src/scheduler/types.ts`): learning steps, ease floor,
-interval cap, etc. Interval fuzzing is intentionally omitted so results stay
-deterministic; if you add it, inject a seeded `rng` (see `src/scheduler/prng.ts`)
-rather than using global randomness.
+### Box rules
 
-### State machine
+| Box | 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Interval | same day | 1d | 3d | 7d | 21d | 60d (max) |
 
-`new → learning → review`, with `review → relearning → review` on a lapse.
-`again` in `review` drops ease by 0.20 (floored at `minEaseFactor`), increments
-`lapses`, and sends the card to `relearning`. A card whose ease has bottomed out
-with `lapses` climbing and interval stuck at the floor is a *leech* — the app
-should flag or suspend it (`cards.is_suspended`).
+- `again` → box 0 · `good` → box +1 · `easy` → box +2 (both capped at 5)
+- `hard` → box unchanged; interval = `floor(0.6 × box interval)`, min 1 day
+- Next due date = **review instant + interval** (a late review reschedules from
+  when it happened, not from the old due date)
+
+`test/leitner.schedule.test.ts` replays all 8 `B_Check_Schedule` traces
+step-for-step. `test/leitner.test.ts` covers each grade, the `hard` floor at every
+box, purity, and `selectDueQueue` ordering.
 
 ## Languages & RTL
 

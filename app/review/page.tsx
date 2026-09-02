@@ -13,15 +13,24 @@
  * users' rows stay private. There is no isolation between demo visitors — they
  * share one deck.
  *
- * To restore real auth: bring back the magic-link flow from git history
- * (commit before this change) and drop the demo_* policies.
+ * Scheduling is the Leitner box system from src/scheduler/leitner.ts
+ * (Build Lane Challenge Option B / B_Rules). Requires migration
+ * 0003_box_scheduler.sql (adds cards.box / cards.review_count).
+ *
+ * To restore real auth: bring back the magic-link flow from git history and
+ * drop the demo_* policies.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { createClient } from '@/lib/supabase/client';
 import { passageTextAttrs } from '@/src/i18n/direction';
-import { review, type Card as SchedulerCard, type Rating } from '@/src/scheduler';
+import {
+  review,
+  selectDueQueue,
+  type Card as SchedulerCard,
+  type Rating,
+} from '@/src/scheduler/leitner';
 
 /** The single account whose data the public demo shares. Demo mode only. */
 const DEMO_USER_ID = '5f3fc43e-cdaa-4bf5-849e-b79834150da0';
@@ -40,21 +49,16 @@ interface CardRow {
   id: string;
   user_id: string;
   passage_id: string;
-  state: SchedulerCard['state'];
+  box: SchedulerCard['box'];
+  review_count: number;
   due_at: string;
-  interval_days: number;
-  ease_factor: number;
-  reps: number;
-  lapses: number;
-  learning_step_index: number;
   last_reviewed_at: string | null;
   is_suspended: boolean;
   passages: PassageRow | null;
 }
 
 const CARD_COLUMNS =
-  'id,user_id,passage_id,state,due_at,interval_days,ease_factor,reps,lapses,' +
-  'learning_step_index,last_reviewed_at,is_suspended,' +
+  'id,user_id,passage_id,box,review_count,due_at,last_reviewed_at,is_suspended,' +
   'passages(id,reference,text,language,direction)';
 
 const RATINGS: { key: Rating; label: string; hint: string }[] = [
@@ -66,23 +70,17 @@ const RATINGS: { key: Rating; label: string; hint: string }[] = [
 
 function rowToCard(row: CardRow): SchedulerCard {
   return {
-    state: row.state,
+    box: row.box,
     dueAt: Date.parse(row.due_at),
-    intervalDays: row.interval_days,
-    easeFactor: row.ease_factor,
-    reps: row.reps,
-    lapses: row.lapses,
-    learningStepIndex: row.learning_step_index,
     lastReviewedAt: row.last_reviewed_at ? Date.parse(row.last_reviewed_at) : null,
+    reviewCount: row.review_count,
   };
 }
 
-/** Short "next due" label for a rating-button preview, e.g. "10m" / "3h" / "20d". */
-function formatNext(card: SchedulerCard, now: number): string {
-  const mins = Math.max(1, Math.round((card.dueAt - now) / 60_000));
-  if (mins < 90) return `${mins}m`;
-  if (mins < 60 * 36) return `${Math.round(mins / 60)}h`;
-  return `${Math.round(mins / 1_440)}d`;
+/** "next due" label for a rating-button preview: whole days, per B_Rules. */
+function formatInterval(days: number): string {
+  if (days <= 0) return 'today';
+  return `${days}d`;
 }
 
 // ── page ───────────────────────────────────────────────────────────────────
@@ -104,22 +102,29 @@ export default function ReviewPage() {
     setLoading(true);
     setError(null);
     // The scheduler never reads a clock — the UI decides what "now" is.
-    const nowIso = new Date().toISOString();
+    const now = Date.now();
     const { data, error: qErr } = await supabase
       .from('cards')
       .select(CARD_COLUMNS)
       .eq('user_id', DEMO_USER_ID) // demo mode: one fixed account, no auth
       .eq('is_suspended', false)
-      .lte('due_at', nowIso)
-      .order('due_at', { ascending: true })
-      .limit(50);
+      .lte('due_at', new Date(now).toISOString())
+      .limit(200);
 
     setLoading(false);
     if (qErr) {
       setError(qErr.message);
       return;
     }
-    setQueue((data ?? []) as unknown as CardRow[]);
+
+    // B_Rules daily cap: 20 cards, most overdue → lowest box → reference A-Z.
+    const rows = (data ?? []) as unknown as CardRow[];
+    const ordered = selectDueQueue(
+      rows.map((row) => ({ row, card: rowToCard(row), reference: row.passages?.reference ?? '' })),
+      now,
+    ).map((entry) => entry.row);
+
+    setQueue(ordered);
     setIndex(0);
     setReviewed(0);
     setRevealed(false);
@@ -130,11 +135,9 @@ export default function ReviewPage() {
   }, [loadQueue]);
 
   /**
-   * Demo mode: reset the whole shared deck to brand-new and due now, straight
-   * from the app — no SQL editor needed. Runs the same UPDATE as the reset
-   * snippet in supabase/migrations/0002_demo_mode.sql, allowed by the
-   * demo_cards_update RLS policy. First click arms; second click within a few
-   * seconds executes.
+   * Demo mode: reset the whole shared deck to box 0 and due now, straight from
+   * the app — no SQL editor needed. Allowed by the demo_cards_update RLS policy.
+   * First click arms; second click within a few seconds executes.
    */
   const resetDemo = useCallback(async () => {
     if (!confirmReset) {
@@ -148,13 +151,9 @@ export default function ReviewPage() {
     const { error: rErr } = await supabase
       .from('cards')
       .update({
-        state: 'new',
+        box: 0,
+        review_count: 0,
         due_at: new Date().toISOString(),
-        interval_days: 0,
-        ease_factor: 2.5,
-        reps: 0,
-        lapses: 0,
-        learning_step_index: 0,
         last_reviewed_at: null,
       })
       .eq('user_id', DEMO_USER_ID);
@@ -168,14 +167,14 @@ export default function ReviewPage() {
 
   const current = queue[index];
 
-  // Interval preview for each rating button.
+  // Next-interval preview for each rating button.
   const previews = useMemo(() => {
     if (!current) return null;
     const card = rowToCard(current);
     const now = Date.now();
     const byRating = {} as Record<Rating, string>;
     for (const { key } of RATINGS) {
-      byRating[key] = formatNext(review(card, key, now).card, now);
+      byRating[key] = formatInterval(review(card, key, now).log.intervalDays);
     }
     return byRating;
   }, [current]);
@@ -191,13 +190,9 @@ export default function ReviewPage() {
     const { error: cardErr } = await supabase
       .from('cards')
       .update({
-        state: next.state,
+        box: next.box,
+        review_count: next.reviewCount,
         due_at: new Date(next.dueAt).toISOString(),
-        interval_days: next.intervalDays,
-        ease_factor: next.easeFactor,
-        reps: next.reps,
-        lapses: next.lapses,
-        learning_step_index: next.learningStepIndex,
         last_reviewed_at: new Date(now).toISOString(),
       })
       .eq('id', current.id);
@@ -207,13 +202,11 @@ export default function ReviewPage() {
       card_id: current.id,
       reviewed_at: new Date(log.reviewedAt).toISOString(),
       rating: log.rating,
-      state_before: log.stateBefore,
-      state_after: log.stateAfter,
-      interval_days_before: log.intervalDaysBefore,
-      interval_days_after: log.intervalDaysAfter,
-      ease_before: log.easeBefore,
-      ease_after: log.easeAfter,
-      elapsed_days: log.elapsedDays,
+      box_before: log.boxBefore,
+      box_after: log.boxAfter,
+      interval_days: log.intervalDays,
+      due_before: new Date(log.dueBefore).toISOString(),
+      due_after: new Date(log.dueAfter).toISOString(),
     });
 
     setSaving(false);
@@ -240,14 +233,14 @@ export default function ReviewPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {queue.length > 0 && index < queue.length && (
             <span className="muted">
-              {index + 1} / {queue.length}
+              {index + 1} / {queue.length} · box {current?.box ?? 0}
             </span>
           )}
           <button
             className="reset"
             onClick={() => void resetDemo()}
             disabled={resetting || loading}
-            title="Set every demo card back to new and due now"
+            title="Set every demo card back to box 0 and due now"
           >
             {resetting
               ? 'Resetting…'
