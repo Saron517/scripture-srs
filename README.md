@@ -1,9 +1,10 @@
 # scripture-srs
 
 A multilingual scripture‑memorization tool — one screen at `/review`, backed by
-Supabase and an SM‑2 spaced‑repetition scheduler. Pick up the next verse that's
-due, recite it, reveal, and grade yourself; the schedule updates and the verse
-comes back later.
+Supabase, a pure Leitner‑box spaced‑repetition scheduler, and a pure
+answer‑checker. Pick up the next verse that's due, type it from memory and have
+it graded, reveal, and rate yourself; the schedule updates and the verse comes
+back later.
 
 - **Live:** https://scripture-srs.vercel.app/review
 - **Repo:** https://github.com/Saron517/scripture-srs
@@ -14,7 +15,7 @@ comes back later.
 
 ### 1. Hours spent
 
-About 3 hours, most of it spent debugging deployment and auth issues rather than the core scheduling logic itself.
+About 5–6 hours total, across two sittings. The first ~3 hours were the core build — the Leitner scheduler, the Supabase schema, and the `/review` screen — and most of that time went to fighting deployment and auth rather than the scheduling logic itself. The second ~2–3 hours added the typed‑answer checker (with the `B_Check_Answers` conformance tests), imported the challenge's `B_Cards` deck, added a simulated‑clock control so the demo deck can be advanced without waiting real days, and got the whole thing onto Vercel — where the first build broke on a missing env var.
 
 ### 2. Hardest decision: requiring sign‑in on the review screen, then removing it
 
@@ -28,11 +29,13 @@ After the third failure, I made the call to remove sign in from the review scree
 
 next.config.mjs has a setting called extensionAlias that tells the bundler to treat .js file imports as if they were .ts files. My scheduler code imports its own files using .js at the end, which is normal in plain JavaScript projects, but Next.js's default bundler doesn't automatically know those .js imports actually point to .ts files, so I forced it to understand that with this setting. The catch is this only works with one specific bundler. If someone runs the newer, faster dev server instead, it breaks with no warning at all, and nothing in the scheduler code explains why this setting exists. The clean fix would be to remove the .js extensions from the imports or turn the scheduler into its own separate package. I didn't have time to do either.
 
-A second thing, smaller but still worth naming: because reviewing a card pushes it to a future due date, once someone finishes reviewing everything, the app just says nothing is due, with no way to try it again without resetting the data. I ended up adding a "Reset demo deck" button directly in the app so anyone can reset it themselves without needing database access, but this only exists because the natural behavior of a spaced repetition app makes repeat demoing awkward.
+A second thing, smaller but still worth naming: because reviewing a card pushes it to a future due date, once someone finishes reviewing everything, the app just says nothing is due, with no way to try it again without resetting the data. I ended up adding a "Reset demo deck" button and a "+1 day / +7 days" simulated‑clock control directly in the app so anyone can keep demoing without database access, but both only exist because the natural behavior of a spaced repetition app makes repeat demoing awkward.
+
+A third thing, and the one that actually bit me: the `/review` screen builds its Supabase client during render, so `next build` runs that code while prerendering the page and the whole build hard‑fails if `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` aren't set — which is exactly how the first Vercel deploy broke. It's fine in practice because the values are always there, but one missing env var takes down the entire build instead of just that one page. The page is fully client‑driven and shouldn't be prerendered at all; the clean fix is to opt it out of static generation.
 
 ### 4. How I used AI
 
-I used Claude Code to build the app and reviewed each piece as it came back to me. I handed it the database schema, the scheduling logic, the tests, and the actual screen. I pushed back on scope more than once: I told it to skip building a verse picker or handling translation licensing, since verses just get imported from a file, and I insisted the scheduler stay a pure function that never reads the system clock so it could actually be tested. I also overrode its suggestion during a git conflict, choosing to force push over its suggested rebase since the remote only held an empty placeholder file. The most valuable part of working with it happened during deployment, when a reviewer hit a real bug I couldn't reproduce myself. I had Claude Code check the actual database directly rather than guessing, which is how we found the real problem: a stale link pointing to an old, frozen version of the site.
+I built this with Claude Code end to end — schema, the Leitner scheduler, the answer checker, the tests, the review screen — reviewing each piece as it came back and pushing back on scope (no verse picker, no translation licensing). The line I held firm on is that the scheduler and checker stay pure functions with no clock and no I/O, because that is what makes them testable, and I had it restructure code more than once when it drifted off that. Where I overrode it: it let the vocalised Arabic in the `B_Cards` deck drift under Unicode normalization, so I made it regenerate that file byte‑for‑byte from the test fixtures instead of hand‑retyping; and when `/review` came up empty I stopped it from rewriting the query and traced the real cause to row‑level‑security policies that had never been applied to the database, not to the code.
 
 ---
 
