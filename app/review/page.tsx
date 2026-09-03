@@ -285,9 +285,6 @@ export default function ReviewPage() {
       <div className="top">
         <div>
           <h1>Scripture Review</h1>
-          <span className="muted" style={{ display: 'block', marginTop: 2 }}>
-            Demo mode — shared data, no sign-in
-          </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {queue.length > 0 && index < queue.length && (
